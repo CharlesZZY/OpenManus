@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -9,12 +9,19 @@ from app.logger import logger
 from app.sandbox.client import SANDBOX_CLIENT
 from app.schema import ROLE_TYPE, AgentState, Memory, Message
 
+if TYPE_CHECKING:
+    from app.trace.manager import TraceManager
+
 
 class BaseAgent(BaseModel, ABC):
     """Abstract base class for managing agent state and execution.
 
     Provides foundational functionality for state transitions, memory management,
     and a step-based execution loop. Subclasses must implement the `step` method.
+    
+    Supports:
+    - Unlimited execution when max_steps <= 0
+    - Execution tracing when enable_trace is True
     """
 
     # Core attributes
@@ -37,10 +44,23 @@ class BaseAgent(BaseModel, ABC):
     )
 
     # Execution control
-    max_steps: int = Field(default=10, description="Maximum steps before termination")
+    max_steps: int = Field(
+        default=10,
+        description="Maximum steps before termination. Set to 0 or negative for unlimited."
+    )
     current_step: int = Field(default=0, description="Current step in execution")
 
     duplicate_threshold: int = 2
+
+    # Tracing support
+    enable_trace: bool = Field(
+        default=False,
+        description="Whether to enable execution tracing"
+    )
+    trace_manager: Optional[Any] = Field(
+        default=None,
+        description="TraceManager instance for recording execution"
+    )
 
     class Config:
         arbitrary_types_allowed = True
@@ -124,6 +144,10 @@ class BaseAgent(BaseModel, ABC):
 
         Raises:
             RuntimeError: If the agent is not in IDLE state at start.
+        
+        Notes:
+            - Set max_steps <= 0 for unlimited execution (only terminates via Terminate tool)
+            - When enable_trace is True, execution steps are recorded to trace_manager
         """
         if self.state != AgentState.IDLE:
             raise RuntimeError(f"Cannot run agent from state: {self.state}")
@@ -132,12 +156,24 @@ class BaseAgent(BaseModel, ABC):
             self.update_memory("user", request)
 
         results: List[str] = []
+        
+        # Determine if we have unlimited steps
+        unlimited_steps = self.max_steps <= 0
+        
         async with self.state_context(AgentState.RUNNING):
-            while (
-                self.current_step < self.max_steps and self.state != AgentState.FINISHED
-            ):
+            while self.state != AgentState.FINISHED:
+                # Check step limit (skip if unlimited)
+                if not unlimited_steps and self.current_step >= self.max_steps:
+                    break
+                    
                 self.current_step += 1
-                logger.info(f"Executing step {self.current_step}/{self.max_steps}")
+                
+                # Log step info
+                if unlimited_steps:
+                    logger.info(f"Executing step {self.current_step} (unlimited mode)")
+                else:
+                    logger.info(f"Executing step {self.current_step}/{self.max_steps}")
+                
                 step_result = await self.step()
 
                 # Check for stuck state
@@ -146,10 +182,12 @@ class BaseAgent(BaseModel, ABC):
 
                 results.append(f"Step {self.current_step}: {step_result}")
 
-            if self.current_step >= self.max_steps:
+            # Handle max steps reached (only if not unlimited)
+            if not unlimited_steps and self.current_step >= self.max_steps:
                 self.current_step = 0
                 self.state = AgentState.IDLE
                 results.append(f"Terminated: Reached max steps ({self.max_steps})")
+                
         await SANDBOX_CLIENT.cleanup()
         return "\n".join(results) if results else "No steps executed"
 

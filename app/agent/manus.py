@@ -19,13 +19,15 @@ class Manus(ToolCallAgent):
     """A versatile general-purpose agent with support for both local and MCP tools."""
 
     name: str = "Manus"
-    description: str = "A versatile agent that can solve various tasks using multiple tools including MCP-based tools"
+    description: str = (
+        "A versatile agent that can solve various tasks using multiple tools including MCP-based tools"
+    )
 
     system_prompt: str = SYSTEM_PROMPT.format(directory=config.workspace_root)
     next_step_prompt: str = NEXT_STEP_PROMPT
 
     max_observe: int = 10000
-    max_steps: int = 20
+    max_steps: int = 0  # Unlimited steps
 
     # MCP clients for remote tool access
     mcp_clients: MCPClients = Field(default_factory=MCPClients)
@@ -36,7 +38,7 @@ class Manus(ToolCallAgent):
             PythonExecute(),
             BrowserUseTool(),
             StrReplaceEditor(),
-            AskHuman(),
+            # AskHuman(),
             Terminate(),
         )
     )
@@ -144,7 +146,7 @@ class Manus(ToolCallAgent):
             self._initialized = True
 
         original_prompt = self.next_step_prompt
-        recent_messages = self.memory.messages[-3:] if self.memory.messages else []
+        recent_messages = self.memory.messages if self.memory.messages else []
         browser_in_use = any(
             tc.function.name == BrowserUseTool().name
             for msg in recent_messages

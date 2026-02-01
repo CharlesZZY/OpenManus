@@ -297,33 +297,45 @@ class WebSearch(BaseTool):
         for engine_name in engine_order:
             engine = self._search_engine[engine_name]
             logger.info(f"🔎 Attempting search with {engine_name.capitalize()}...")
-            search_items = await self._perform_search_with_engine(
-                engine, query, num_results, search_params
-            )
+            
+            try:
+                search_items = await self._perform_search_with_engine(
+                    engine, query, num_results, search_params
+                )
 
-            if not search_items:
+                if not search_items:
+                    failed_engines.append(engine_name)
+                    logger.warning(f"⚠️ {engine_name.capitalize()} returned no results, trying next engine...")
+                    continue
+
+                if failed_engines:
+                    logger.info(
+                        f"✅ Search successful with {engine_name.capitalize()} after trying: {', '.join(failed_engines)}"
+                    )
+
+                # Transform search items into structured results
+                return [
+                    SearchResult(
+                        position=i + 1,
+                        url=item.url,
+                        title=item.title
+                        or f"Result {i+1}",  # Ensure we always have a title
+                        description=item.description or "",
+                        source=engine_name,
+                    )
+                    for i, item in enumerate(search_items)
+                ]
+            except Exception as e:
+                failed_engines.append(engine_name)
+                error_msg = str(e)
+                if "429" in error_msg or "Too Many Requests" in error_msg:
+                    logger.warning(f"⚠️ {engine_name.capitalize()} rate limited (HTTP 429), trying next engine...")
+                else:
+                    logger.warning(f"⚠️ {engine_name.capitalize()} failed: {error_msg[:100]}, trying next engine...")
                 continue
 
-            if failed_engines:
-                logger.info(
-                    f"Search successful with {engine_name.capitalize()} after trying: {', '.join(failed_engines)}"
-                )
-
-            # Transform search items into structured results
-            return [
-                SearchResult(
-                    position=i + 1,
-                    url=item.url,
-                    title=item.title
-                    or f"Result {i+1}",  # Ensure we always have a title
-                    description=item.description or "",
-                    source=engine_name,
-                )
-                for i, item in enumerate(search_items)
-            ]
-
         if failed_engines:
-            logger.error(f"All search engines failed: {', '.join(failed_engines)}")
+            logger.error(f"❌ All search engines failed: {', '.join(failed_engines)}")
         return []
 
     async def _fetch_content_for_results(

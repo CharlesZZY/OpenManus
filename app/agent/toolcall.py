@@ -33,7 +33,7 @@ class ToolCallAgent(ReActAgent):
     tool_calls: List[ToolCall] = Field(default_factory=list)
     _current_base64_image: Optional[str] = None
 
-    max_steps: int = 30
+    max_steps: int = 0  # Unlimited steps
     max_observe: Optional[Union[int, bool]] = None
 
     async def think(self) -> bool:
