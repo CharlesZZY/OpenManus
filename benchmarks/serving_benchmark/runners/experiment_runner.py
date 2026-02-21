@@ -31,6 +31,7 @@ from benchmarks.serving_benchmark.core.schema import (
     RequestMode,
     Suite,
 )
+from benchmarks.serving_benchmark.core.vllm_client import ModelRegistry
 from benchmarks.serving_benchmark.datasets.loader import load_dataset, load_suite
 from benchmarks.serving_benchmark.schedulers import create_scheduler
 from benchmarks.serving_benchmark.workload.generator import (
@@ -65,6 +66,8 @@ class ExperimentRunner:
         seeds: Optional[List[int]] = None,
         output_root: str = "output",
         max_samples_per_dataset: int = 100,
+        model_alias: Optional[str] = None,
+        registry: Optional[ModelRegistry] = None,
     ):
         self.mode = mode
         self.suite = suite
@@ -72,13 +75,14 @@ class ExperimentRunner:
         self.output_root = Path(output_root)
         self.max_samples = max_samples_per_dataset
 
-        # Load baseline config
         with open(baseline_cfg_path, "r") as f:
             self.baseline_cfg = yaml.safe_load(f)
 
-        # Load workload config
         with open(workload_cfg_path, "r") as f:
             self.workload_cfg = yaml.safe_load(f)
+
+        self.registry = registry or ModelRegistry()
+        self.model_alias = model_alias or self.registry.first_model
 
         self.experiment_id = f"exp_{int(time.time())}_{uuid.uuid4().hex[:6]}"
 
@@ -88,6 +92,7 @@ class ExperimentRunner:
             "raw_logs",
             "agg_metrics",
             "plots",
+            "plot_data",
             "configs",
             "reports",
             "mermaid",
@@ -96,7 +101,6 @@ class ExperimentRunner:
         return out
 
     def _load_sample_pools(self) -> Dict[str, List[BenchmarkSample]]:
-        """Load samples grouped by suite."""
         pools: Dict[str, List[BenchmarkSample]] = {}
         for s in (Suite.S, Suite.R, Suite.L):
             try:
@@ -109,7 +113,10 @@ class ExperimentRunner:
         if self.mode == "single":
             from benchmarks.serving_benchmark.runners.single_runner import SingleRunner
 
-            runner = SingleRunner()
+            runner = SingleRunner(
+                registry=self.registry,
+                model_alias=self.model_alias,
+            )
             log = await runner.run(request)
             return [log]
         else:
@@ -117,7 +124,10 @@ class ExperimentRunner:
                 WorkflowRunner,
             )
 
-            runner = WorkflowRunner()
+            runner = WorkflowRunner(
+                registry=self.registry,
+                default_model=self.model_alias,
+            )
             return await runner.run(request)
 
     async def _execute_phase(
@@ -132,7 +142,6 @@ class ExperimentRunner:
         all_logs: List[RequestLog] = []
         base_time = time.time()
 
-        # Create BenchmarkRequests
         requests: List[BenchmarkRequest] = []
         for item in items:
             req = BenchmarkRequest(
@@ -147,18 +156,16 @@ class ExperimentRunner:
             )
             requests.append(req)
 
-        # Enqueue all
         for req in requests:
             await scheduler.enqueue(req)
 
-        # Process through scheduler
         max_empty_polls = 10
         empty_count = 0
         while empty_count < max_empty_polls:
             batch = await scheduler.schedule()
             if not batch:
                 empty_count += 1
-                await asyncio.sleep(0.05)  # allow flush timers to expire
+                await asyncio.sleep(0.05)
                 continue
             empty_count = 0
             for req in batch:
@@ -171,7 +178,6 @@ class ExperimentRunner:
 
                 await scheduler.on_complete(req.req_id, req)
 
-        # Final drain
         remaining = await scheduler.drain()
         for req in remaining:
             logs = await self._run_single_request(req)
@@ -179,7 +185,7 @@ class ExperimentRunner:
 
         return all_logs
 
-    async def run_once(self, seed: int) -> tuple[ExperimentConfig, List[RequestLog]]:
+    async def run_once(self, seed: int):
         """Run one repetition of the experiment."""
         sched_cfg = self.baseline_cfg.get("scheduler", {})
         sched_name = sched_cfg.get("name", "fifo")
@@ -203,33 +209,61 @@ class ExperimentRunner:
         warmup_items, run_items = gen.generate()
 
         config_id = (
-            f"{sched_name}_{wl_cfg.get('pattern', 'poisson')}_{self.mode}_{seed}"
+            f"{sched_name}_{wl_cfg.get('pattern', 'poisson')}"
+            f"_{self.mode}_{self.model_alias}_{seed}"
         )
 
+        model_cfg = self.registry.get(self.model_alias)
         exp_config = ExperimentConfig(
             config_id=config_id,
             baseline=sched_name,
             pattern=wl_cfg.get("pattern", "poisson"),
             suite=self.suite,
             mode=self.mode,
+            model_size=model_cfg.size_tier,
             seed=seed,
             git_commit=_git_commit_hash(),
         )
+
+        # GPU logger
+        gpu_logger = None
+        try:
+            from benchmarks.serving_benchmark.core.gpu_logger import GPULogger
+
+            out_dir = (
+                self._make_output_dir()
+                if not hasattr(self, "_out_dir")
+                else self._out_dir
+            )
+            gpu_logger = GPULogger(
+                output_dir=out_dir / "raw_logs",
+                prefix=f"gpu_samples_{seed}",
+            )
+            gpu_logger.start()
+        except Exception:
+            pass
 
         # Warm-up
         await self._execute_phase(
             warmup_items, scheduler, config_id, seed, is_warmup=True
         )
 
-        # Sampling
+        # Fresh scheduler for sampling phase
         scheduler = create_scheduler(sched_name, **sched_params)
         logs = await self._execute_phase(run_items, scheduler, config_id, seed)
 
-        return exp_config, logs
+        if gpu_logger is not None:
+            try:
+                gpu_logger.stop()
+            except Exception:
+                pass
+
+        return exp_config, logs, gpu_logger
 
     async def run_all(self) -> Dict[str, Any]:
         """Run all repetitions and save outputs."""
-        out_dir = self._make_output_dir()
+        self._out_dir = self._make_output_dir()
+        out_dir = self._out_dir
         all_results: Dict[str, Any] = {
             "experiment_id": self.experiment_id,
             "configs": [],
@@ -237,17 +271,34 @@ class ExperimentRunner:
         }
 
         for repeat_idx, seed in enumerate(self.seeds):
-            exp_config, logs = await self.run_once(seed)
+            exp_config, logs, gpu_logger = await self.run_once(seed)
+
             exp_config.repeat = repeat_idx
             all_results["configs"].append(asdict(exp_config))
             all_results["logs_by_seed"][seed] = [log.to_dict() for log in logs]
 
-            # Save config
             cfg_path = out_dir / "configs" / f"config_{seed}.json"
             with open(cfg_path, "w") as f:
                 json.dump(asdict(exp_config), f, indent=2)
 
-        # Save raw logs
+            if gpu_logger is not None:
+                try:
+                    gpu_df = gpu_logger.get_dataframe()
+                    if gpu_df is not None and not gpu_df.empty:
+                        gpu_df.to_csv(
+                            out_dir / "raw_logs" / f"gpu_samples_{seed}.csv",
+                            index=False,
+                        )
+                        try:
+                            gpu_df.to_parquet(
+                                out_dir / "raw_logs" / f"gpu_samples_{seed}.parquet",
+                                index=False,
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
         self._save_logs(out_dir, all_results["logs_by_seed"])
 
         return all_results
@@ -272,10 +323,9 @@ class ExperimentRunner:
                 parquet_path = out_dir / "raw_logs" / "request_logs.parquet"
                 df.to_parquet(parquet_path, index=False)
             except Exception:
-                pass  # pyarrow not available
+                pass
 
         except ImportError:
-            # pandas not available — save as JSON
             json_path = out_dir / "raw_logs" / "request_logs.json"
             all_rows = []
             for seed, rows in logs_by_seed.items():

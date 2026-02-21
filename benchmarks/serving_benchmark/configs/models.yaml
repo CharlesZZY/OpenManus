@@ -1,0 +1,76 @@
+# ============================================================
+# Model configurations for vLLM serving
+#
+# Each model runs as a separate vLLM server:
+#   python -m vllm.entrypoints.openai.api_server \
+#       --model <model_name> --port <port> [--tensor-parallel-size <tp>]
+#
+# Switch models in scripts via: --model <alias>
+# ============================================================
+
+models:
+    qwen_2_5b:
+        model_name: 'Qwen/Qwen2.5-3B-Instruct'
+        base_url: 'http://localhost:8000/v1'
+        api_key: 'EMPTY'
+        max_tokens: 4096
+        temperature: 0.7
+        size_tier: 'small' # <10B
+        tensor_parallel: 1
+
+    llama_7b:
+        model_name: 'meta-llama/Llama-2-7b-chat-hf'
+        base_url: 'http://localhost:8001/v1'
+        api_key: 'EMPTY'
+        max_tokens: 4096
+        temperature: 0.7
+        size_tier: 'small' # <10B
+        tensor_parallel: 1
+
+    llama_13b:
+        model_name: 'meta-llama/Llama-2-13b-chat-hf'
+        base_url: 'http://localhost:8002/v1'
+        api_key: 'EMPTY'
+        max_tokens: 4096
+        temperature: 0.7
+        size_tier: 'medium' # 10B-70B
+        tensor_parallel: 2
+
+# ============================================================
+# MultiAgentFlow workflow configuration
+#
+# The Coordinator autonomously decides which workers to use
+# and how many steps to take. No fixed pipeline.
+#
+# workers: which OpenManus workers to register
+# coordinator_model: which model alias the Coordinator uses
+# worker_model: default model alias for all workers
+#   (individual overrides possible via worker_models map)
+# ============================================================
+
+workflow:
+    coordinator_model: 'qwen_2_5b'
+    worker_model: 'qwen_2_5b'
+
+    # Per-worker model overrides (optional)
+    worker_models:
+        code: 'qwen_2_5b'
+        math: 'qwen_2_5b'
+
+    # Which OpenManus workers to register with the Coordinator.
+    # The Coordinator decides at runtime which ones to use and in what order.
+    # Available: code, math, summarizer, search, browser, file,
+    #            copywriter, history, research, data_analyst
+    workers:
+        - code
+        - math
+        - summarizer
+        - research
+        - data_analyst
+        - history
+        - copywriter
+        - search
+        - browser
+        - file
+
+    coordinator_max_steps: 30

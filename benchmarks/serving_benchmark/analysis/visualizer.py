@@ -316,17 +316,23 @@ sequenceDiagram
 
 
 def generate_mermaid_workflow_dag(mermaid_dir: Path):
-    """Generate Mermaid DAG for the 3-step workflow."""
+    """Generate Mermaid DAG for MultiAgentFlow workflow (autonomous)."""
     mermaid = """\
 flowchart TD
-    A[Client Request] --> B[Step 1: Analyse Problem]
-    B --> C[Step 2: Reason / Retrieve]
-    C --> D[Step 3: Generate Answer]
-    D --> E[Quality Check]
-    E --> F[Return Result]
-
-    B -.-> |workflow_id| C
-    C -.-> |workflow_id| D
+    A[Client Request] --> B[MultiAgentFlow]
+    B --> C[Coordinator]
+    C -->|"autonomous decisions"| D{Select Worker}
+    D -->|delegate_task| E[code Worker]
+    D -->|delegate_task| F[math Worker]
+    D -->|delegate_task| G[summarizer Worker]
+    D -->|delegate_task| H["... other Workers"]
+    E -->|result| C
+    F -->|result| C
+    G -->|result| C
+    H -->|result| C
+    C -->|"all done"| I[terminate]
+    I --> J[Quality Check]
+    J --> K[Return Result]
 """
     path = mermaid_dir / "dag_workflow.md"
     path.write_text(f"```mermaid\n{mermaid}```\n")

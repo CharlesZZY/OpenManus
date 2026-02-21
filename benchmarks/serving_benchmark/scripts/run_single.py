@@ -6,6 +6,7 @@ Usage:
         --baseline fifo \
         --workload poisson \
         --mode single \
+        --model qwen_2_5b \
         --seeds 42 123 2024
 """
 
@@ -30,6 +31,16 @@ def parse_args():
     parser.add_argument("--seeds", nargs="+", type=int, default=[42, 123, 2024])
     parser.add_argument("--output", default="output")
     parser.add_argument("--max-samples", type=int, default=50)
+    parser.add_argument(
+        "--model",
+        default=None,
+        help="Model alias from configs/models.yaml (default: first model)",
+    )
+    parser.add_argument(
+        "--models-config",
+        default=str(CONFIGS / "models.yaml"),
+        help="Path to models.yaml",
+    )
     return parser.parse_args()
 
 
@@ -46,7 +57,11 @@ async def main():
         print(f"ERROR: {workload_cfg} not found")
         return
 
+    from benchmarks.serving_benchmark.core.vllm_client import ModelRegistry
     from benchmarks.serving_benchmark.runners.experiment_runner import ExperimentRunner
+
+    registry = ModelRegistry(args.models_config)
+    model_alias = args.model or registry.first_model
 
     runner = ExperimentRunner(
         baseline_cfg_path=str(baseline_cfg),
@@ -56,9 +71,12 @@ async def main():
         seeds=args.seeds,
         output_root=args.output,
         max_samples_per_dataset=args.max_samples,
+        model_alias=model_alias,
+        registry=registry,
     )
 
     print(f"Running: {args.baseline} × {args.workload} × {args.mode}")
+    print(f"Model: {model_alias}")
     print(f"Seeds: {args.seeds}")
     print(f"Output: {args.output}/{runner.experiment_id}")
 

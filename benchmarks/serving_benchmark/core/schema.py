@@ -78,6 +78,7 @@ class RequestLog:
     # Experiment identifiers
     config_id: str = ""
     seed: int = 0
+    model_id: str = ""  # model alias from configs/models.yaml
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

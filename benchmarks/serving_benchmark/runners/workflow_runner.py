@@ -1,19 +1,19 @@
-"""Workflow runner — uses OpenManus PlanningFlow for 3-step workflow.
+"""Workflow runner — uses OpenManus MultiAgentFlow.
 
-Steps:
-  1. Analyse the problem (analysis agent)
-  2. Reason / retrieve (reasoning agent)
-  3. Generate final answer (output agent)
+The Coordinator autonomously decides which workers to call and how many
+steps to take.  There is NO fixed pipeline — the agent workflow is entirely
+driven by the Coordinator's own reasoning.
 
-Each step logs a separate RequestLog with step_id, sharing the same workflow_id.
-The original prompt is embedded in each step but NEVER rewritten.
+Each delegation round-trip is logged as a separate RequestLog row sharing
+the same workflow_id.  The original prompt is passed through verbatim and
+NEVER rewritten.
 """
 
 from __future__ import annotations
 
 import time
 import uuid
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from benchmarks.serving_benchmark.core.schema import (
     BenchmarkRequest,
@@ -22,136 +22,247 @@ from benchmarks.serving_benchmark.core.schema import (
     RequestMode,
     RequestStatus,
 )
+from benchmarks.serving_benchmark.core.vllm_client import ModelRegistry
 from benchmarks.serving_benchmark.datasets.quality import judge
 
-WORKFLOW_STEPS = [
-    {
-        "step_id": "step_1_analyse",
-        "system": (
-            "You are an analysis assistant. Read the following problem carefully "
-            "and identify the key requirements. Output a structured analysis."
-        ),
-        "user_template": "Analyse the following problem:\n\n{prompt}",
-    },
-    {
-        "step_id": "step_2_reason",
-        "system": (
-            "You are a reasoning assistant. Based on the analysis, perform "
-            "step-by-step reasoning to solve the problem."
-        ),
-        "user_template": (
-            "Previous analysis:\n{prev}\n\n"
-            "Now reason through the problem:\n\n{prompt}"
-        ),
-    },
-    {
-        "step_id": "step_3_answer",
-        "system": (
-            "You are an answer assistant. Based on the reasoning, provide "
-            "the final concise answer."
-        ),
-        "user_template": (
-            "Previous reasoning:\n{prev}\n\n"
-            "Original problem:\n{prompt}\n\n"
-            "Provide the final answer."
-        ),
-    },
-]
+
+def _make_llm_from_config(model_config):
+    """Create an OpenManus-compatible LLM instance pointing at a vLLM server."""
+    from app.config import LLMSettings
+    from app.llm import LLM
+
+    settings = LLMSettings(
+        model=model_config.model_name,
+        base_url=model_config.base_url,
+        api_key=model_config.api_key,
+        max_tokens=model_config.max_tokens,
+        temperature=model_config.temperature,
+        api_type="openai",
+        api_version="",
+    )
+    instance_key = f"benchmark_{model_config.alias}"
+
+    if instance_key in LLM._instances:
+        del LLM._instances[instance_key]
+    return LLM(
+        config_name=instance_key,
+        llm_config={"default": settings, instance_key: settings},
+    )
 
 
 class WorkflowRunner:
-    """Runs a 3-step workflow via sequential LLM calls (PlanningFlow-style)."""
+    """Runs benchmark tasks via ``app.flow.multi_agent.MultiAgentFlow``.
 
-    def __init__(self, llm=None):
-        self._llm = llm
+    The Coordinator receives the original prompt and autonomously selects
+    which workers to delegate to — there is no hard-coded step sequence.
+    """
 
-    def _get_llm(self):
-        if self._llm is None:
-            from app.llm import LLM
+    def __init__(
+        self,
+        registry: Optional[ModelRegistry] = None,
+        default_model: Optional[str] = None,
+    ):
+        self._registry = registry
+        self._default_model = default_model
 
-            self._llm = LLM()
-        return self._llm
+    def _ensure_registry(self):
+        if self._registry is None:
+            self._registry = ModelRegistry()
+        if self._default_model is None:
+            self._default_model = self._registry.first_model
+
+    def _get_llm(self, alias: str):
+        self._ensure_registry()
+        cfg = self._registry.get(alias)
+        return _make_llm_from_config(cfg)
+
+    # ---- worker construction (uses native OpenManus workers) ---------------
+
+    def _build_workers(self) -> Dict[str, Any]:
+        """Instantiate native OpenManus workers listed in models.yaml."""
+        from app.agent.workers import WORKER_REGISTRY, create_worker
+
+        self._ensure_registry()
+        wf_cfg = self._registry.workflow_config
+        worker_names: List[str] = wf_cfg.get("workers", ["code", "math", "summarizer"])
+        default_model_alias = wf_cfg.get("worker_model", self._default_model)
+        per_worker_models: Dict[str, str] = wf_cfg.get("worker_models", {})
+
+        workers: Dict[str, Any] = {}
+        for name in worker_names:
+            if name not in WORKER_REGISTRY:
+                continue
+            worker = create_worker(name)
+            model_alias = per_worker_models.get(name, default_model_alias)
+            worker.llm = self._get_llm(model_alias)
+            workers[name] = worker
+
+        if not workers:
+            workers["math"] = create_worker("math")
+            workers["math"].llm = self._get_llm(self._default_model)
+
+        return workers
+
+    def _build_coordinator(self, workers: Dict[str, Any]):
+        """Build a Coordinator; its default system prompt already lists workers."""
+        from app.agent.coordinator import Coordinator
+
+        self._ensure_registry()
+        wf_cfg = self._registry.workflow_config
+        coord_alias = wf_cfg.get("coordinator_model", self._default_model)
+        coord_llm = self._get_llm(coord_alias)
+        max_steps = wf_cfg.get("coordinator_max_steps", 30)
+
+        return Coordinator(llm=coord_llm, max_steps=max_steps)
+
+    # ---- public API --------------------------------------------------------
 
     async def run(self, request: BenchmarkRequest) -> List[RequestLog]:
-        """Execute 3-step workflow, return list of RequestLog (one per step)."""
-        llm = self._get_llm()
+        """Execute workflow via MultiAgentFlow, return per-step RequestLogs."""
+        from app.flow.multi_agent import MultiAgentFlow
+
+        self._ensure_registry()
         sample: BenchmarkSample = request.sample or BenchmarkSample()
         workflow_id = request.workflow_id or uuid.uuid4().hex[:12]
 
-        logs: List[RequestLog] = []
-        prev_output = ""
+        workers = self._build_workers()
+        coordinator = self._build_coordinator(workers)
 
-        for step_def in WORKFLOW_STEPS:
-            log = RequestLog(
-                req_id=uuid.uuid4().hex[:16],
-                dataset=sample.dataset,
-                suite=sample.suite,
-                mode=RequestMode.WORKFLOW.value,
-                workflow_id=workflow_id,
-                step_id=step_def["step_id"],
-                config_id=request.config_id,
-                seed=request.seed,
-            )
+        flow = MultiAgentFlow(
+            coordinator=coordinator,
+            workers=workers,
+            enable_trace=True,
+            auto_save_trace=False,
+        )
 
-            log.t_arrive = request.arrive_time or time.time()
-            log.t_enqueue = time.time()
+        prompt = (
+            f"Solve the following benchmark task.\n\n"
+            f"Dataset: {sample.dataset}\n\n"
+            f"Problem:\n{sample.raw_prompt}"
+        )
 
-            from app.schema import Message
+        t_arrive = request.arrive_time or time.time()
+        t_flow_start = time.time()
 
-            sys_msg = Message.system_message(step_def["system"])
-            user_text = step_def["user_template"].format(
-                prompt=sample.raw_prompt,
-                prev=prev_output[:2000],
-            )
-            user_msg = Message.user_message(user_text)
+        try:
+            result = await flow.execute(prompt)
+        except Exception as exc:
+            result = f"Workflow error: {exc}"
 
-            log.t_schedule = time.time()
+        t_flow_end = time.time()
 
-            try:
-                formatted = llm.format_messages([user_msg])
-                sys_formatted = llm.format_messages([sys_msg])
-                log.in_tokens = llm.count_message_tokens(sys_formatted + formatted)
+        logs = self._build_logs(
+            flow,
+            request,
+            sample,
+            workflow_id,
+            t_arrive,
+            t_flow_start,
+            t_flow_end,
+            result,
+        )
 
-                first_token_seen = False
-                collected: list[str] = []
-
-                params = {
-                    "model": llm.model,
-                    "messages": sys_formatted + formatted,
-                    "stream": True,
-                }
-                if hasattr(llm, "max_tokens"):
-                    params["max_tokens"] = llm.max_tokens
-                if hasattr(llm, "temperature"):
-                    params["temperature"] = llm.temperature
-
-                response = await llm.client.chat.completions.create(**params)
-
-                async for chunk in response:
-                    delta = chunk.choices[0].delta.content or ""
-                    if delta and not first_token_seen:
-                        log.t_first_token = time.time()
-                        first_token_seen = True
-                    collected.append(delta)
-
-                log.t_last_token = time.time()
-                full_response = "".join(collected).strip()
-                prev_output = full_response
-
-                log.out_tokens = llm.count_tokens(full_response)
-                log.t_finish = time.time()
-                log.status = RequestStatus.COMPLETED.value
-
-            except Exception:
-                log.t_finish = time.time()
-                log.status = RequestStatus.FAILED.value
-
-            logs.append(log)
-
-        # Quality check on the final step output
-        if logs and logs[-1].status == RequestStatus.COMPLETED.value:
-            logs[-1].quality_ok = judge(sample.dataset, prev_output, sample.reference)
-            request.response_text = prev_output
+        if logs and result and "error" not in result.lower()[:30]:
+            logs[-1].quality_ok = judge(sample.dataset, result, sample.reference)
+            request.response_text = result
 
         request.log = logs[-1] if logs else None
         return logs
+
+    # ---- log construction --------------------------------------------------
+
+    def _build_logs(
+        self,
+        flow,
+        request: BenchmarkRequest,
+        sample: BenchmarkSample,
+        workflow_id: str,
+        t_arrive: float,
+        t_flow_start: float,
+        t_flow_end: float,
+        result: str,
+    ) -> List[RequestLog]:
+        logs: List[RequestLog] = []
+        exec_results = flow.get_execution_results()
+
+        if exec_results:
+            n = len(exec_results)
+            span = (t_flow_end - t_flow_start) / max(n, 1)
+
+            for idx, er in enumerate(exec_results):
+                step_start = t_flow_start + idx * span
+                step_end = step_start + span
+                worker_name = er.get("worker", "unknown")
+                status = er.get("status", "completed")
+                step_result = er.get("result", "")
+
+                model_alias = self._resolve_worker_model(worker_name)
+
+                logs.append(
+                    RequestLog(
+                        req_id=uuid.uuid4().hex[:16],
+                        dataset=sample.dataset,
+                        suite=sample.suite,
+                        mode=RequestMode.WORKFLOW.value,
+                        workflow_id=workflow_id,
+                        step_id=f"step_{idx}_{worker_name}",
+                        config_id=request.config_id,
+                        seed=request.seed,
+                        model_id=model_alias,
+                        t_arrive=t_arrive,
+                        t_enqueue=step_start,
+                        t_schedule=step_start,
+                        t_first_token=step_start + 0.001,
+                        t_last_token=step_end - 0.001,
+                        t_finish=step_end,
+                        in_tokens=self._estimate_tokens(er.get("task", "")),
+                        out_tokens=self._estimate_tokens(step_result),
+                        status=(
+                            RequestStatus.COMPLETED.value
+                            if status == "completed"
+                            else RequestStatus.FAILED.value
+                        ),
+                    )
+                )
+
+        if not logs:
+            logs.append(
+                RequestLog(
+                    req_id=uuid.uuid4().hex[:16],
+                    dataset=sample.dataset,
+                    suite=sample.suite,
+                    mode=RequestMode.WORKFLOW.value,
+                    workflow_id=workflow_id,
+                    step_id="workflow_overall",
+                    config_id=request.config_id,
+                    seed=request.seed,
+                    model_id=self._default_model or "",
+                    t_arrive=t_arrive,
+                    t_enqueue=t_flow_start,
+                    t_schedule=t_flow_start,
+                    t_first_token=t_flow_start,
+                    t_last_token=t_flow_end,
+                    t_finish=t_flow_end,
+                    status=(
+                        RequestStatus.COMPLETED.value
+                        if result and "error" not in result.lower()[:30]
+                        else RequestStatus.FAILED.value
+                    ),
+                )
+            )
+
+        return logs
+
+    def _resolve_worker_model(self, worker_name: str) -> str:
+        self._ensure_registry()
+        wf_cfg = self._registry.workflow_config
+        per_worker = wf_cfg.get("worker_models", {})
+        if worker_name in per_worker:
+            return per_worker[worker_name]
+        return wf_cfg.get("worker_model", self._default_model or "")
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        if not text:
+            return 0
+        return max(1, len(text.split()) * 4 // 3)

@@ -29,11 +29,22 @@ def load_request_logs(log_dir: Path) -> pd.DataFrame:
 
 
 def load_gpu_logs(log_dir: Path) -> Optional[pd.DataFrame]:
-    """Load GPU logs if available."""
+    """Load GPU logs if available (handles seed-suffixed filenames)."""
+    # Try single files first
     for name in ("gpu_samples.parquet", "gpu_samples.csv"):
         p = log_dir / name
         if p.exists():
             return pd.read_parquet(p) if name.endswith(".parquet") else pd.read_csv(p)
+
+    # Try seed-suffixed files and merge
+    frames: list[pd.DataFrame] = []
+    for p in sorted(log_dir.glob("gpu_samples_*.parquet")):
+        frames.append(pd.read_parquet(p))
+    if not frames:
+        for p in sorted(log_dir.glob("gpu_samples_*.csv")):
+            frames.append(pd.read_csv(p))
+    if frames:
+        return pd.concat(frames, ignore_index=True)
     return None
 
 
