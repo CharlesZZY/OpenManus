@@ -1,0 +1,5 @@
+scheduler:
+    name: continuous_batch
+    params:
+        # max_num_seqs: 未指定, default 64
+        max_num_seqs: 64

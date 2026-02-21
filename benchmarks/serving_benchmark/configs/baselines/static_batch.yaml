@@ -1,0 +1,5 @@
+scheduler:
+    name: static_batch
+    params:
+        batch_size: 16
+        flush_interval_ms: 50.0

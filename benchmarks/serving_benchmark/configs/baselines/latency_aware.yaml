@@ -1,0 +1,6 @@
+scheduler:
+    name: latency_aware
+    params:
+        # SLO thresholds — 未指定, using defaults (flagged in report)
+        ttft_slo: 0.5 # seconds
+        tpot_slo: 0.1 # seconds

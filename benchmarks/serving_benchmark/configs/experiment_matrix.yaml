@@ -1,0 +1,105 @@
+# ============================================================
+# Experiment Matrix
+# Dimensions: pattern × suite × baseline × mode
+# + burst/longtail stress groups
+# ============================================================
+
+defaults:
+    repeat: 3
+    seeds: [42, 123, 2024]
+    warmup_duration_s: 300
+    warmup_max_requests: 200
+    run_duration_s: 1800
+    run_max_requests: 10000
+
+    # SLO (未指定, defaults)
+    slo:
+        ttft_threshold: 0.5
+        tpot_threshold: 0.1
+        e2e_threshold: 30.0
+
+    # Model sizes (未指定阈值, using parameter-count tiers)
+    model_size_tiers:
+        small: '<10B'
+        medium: '10B-70B'
+        large: '>70B'
+
+    # Deployment (未指定, single-node only; multi-node interface reserved)
+    deployment: single_node
+
+# Grid axes
+patterns:
+    - poisson
+    - onoff
+    - diurnal
+    - longtail
+
+suites:
+    - S
+    - R
+    - L
+    - mixed # S:R:L = 4:3:3
+
+baselines:
+    - fifo
+    - srf
+    - static_batch
+    - continuous_batch
+    - orca
+    - latency_aware
+    - parrot
+
+modes:
+    - single
+    - workflow
+
+# Stress test groups (additional)
+stress_tests:
+    - name: burst_stress
+      pattern: onoff
+      arrival_kwargs:
+          on_dur: 10.0
+          on_rate: 100.0
+          off_dur: 5.0
+          off_rate: 2.0
+      suite: mixed
+
+    - name: longtail_stress
+      pattern: longtail
+      arrival_kwargs:
+          base_rate: 20.0
+          l_suite_boost: 0.40
+      suite_ratio:
+          S: 0.2
+          R: 0.2
+          L: 0.6
+
+# Tuning strategy
+tuning:
+    with_slo:
+        method: grid_search
+        objective: maximize_goodput
+        record_all_attempts: true
+    without_slo:
+        method: pareto
+        constraint: minimize_p99
+        objective: maximize_tokens_per_sec
+
+# 未指定 items (for report)
+unspecified:
+    - 'model_size thresholds: small(<10B), medium(10B-70B), large(>70B)'
+    - 'multi-node deployment: interface reserved, not implemented'
+    - 'scalability metrics: placeholder'
+    - 'QoE thresholds: piecewise linear defaults'
+    - 'SLO thresholds: TTFT<=0.5s, TPOT<=0.1s (configurable)'
+    - 'vLLM max_num_seqs: 64'
+    - 'SRF predicted_out: historical average'
+    - 'HumanEval pass@k k>1 fan-out: not enabled'
+    - 'GSM8K numerical parsing: #### regex'
+    - 'TruthfulQA evaluation: MC1/MC2 (not Truth*Info)'
+    - 'Selective_Context judge: weak retention check'
+    - 'Long-tail L suite boost: +20%'
+    - 'GPU sampling period: 100ms'
+    - 'Output directory: output/{experiment_id}/'
+    - 'Sliding window size: 60s'
+    - 'Semantic cache hash: SHA256(prompt[:512])'

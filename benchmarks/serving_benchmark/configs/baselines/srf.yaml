@@ -1,0 +1,4 @@
+scheduler:
+    name: srf
+    params: {}
+    # predicted_out_tokens: 未指定, uses historical average / max_tokens/2 fallback

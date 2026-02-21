@@ -1,0 +1,14 @@
+workload:
+    pattern: longtail
+    arrival_kwargs:
+        base_rate: 10.0
+        # L suite boost: 未指定, default +20%
+        l_suite_boost: 0.20
+    suite_ratio:
+        S: 0.33
+        R: 0.27
+        L: 0.40 # boosted for long-tail scenario
+    warmup_duration_s: 300
+    warmup_max_requests: 200
+    run_duration_s: 1800
+    run_max_requests: 10000

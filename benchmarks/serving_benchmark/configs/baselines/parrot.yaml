@@ -1,0 +1,4 @@
+scheduler:
+    name: parrot
+    params:
+        cache_ttl: 300.0 # seconds

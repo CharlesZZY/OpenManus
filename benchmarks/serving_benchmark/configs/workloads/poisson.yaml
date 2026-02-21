@@ -1,0 +1,12 @@
+workload:
+    pattern: poisson
+    arrival_kwargs:
+        rate: 10.0 # rps (lambda)
+    suite_ratio:
+        S: 0.4
+        R: 0.3
+        L: 0.3
+    warmup_duration_s: 300
+    warmup_max_requests: 200
+    run_duration_s: 1800
+    run_max_requests: 10000

@@ -1,0 +1,14 @@
+workload:
+    pattern: diurnal
+    arrival_kwargs:
+        period_s: 7200.0 # 2 hours (time-scaled)
+        trough_rate: 10.0 # rps at trough
+        peak_trough_ratio: 5.0 # peak / trough = 5
+    suite_ratio:
+        S: 0.4
+        R: 0.3
+        L: 0.3
+    warmup_duration_s: 300
+    warmup_max_requests: 200
+    run_duration_s: 1800
+    run_max_requests: 10000

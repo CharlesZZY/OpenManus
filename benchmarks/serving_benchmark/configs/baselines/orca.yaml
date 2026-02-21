@@ -1,0 +1,6 @@
+scheduler:
+    name: orca
+    params:
+        iter_quantum: 1
+        selective_batching: true
+        max_batch: 64

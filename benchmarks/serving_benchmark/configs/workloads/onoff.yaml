@@ -1,0 +1,15 @@
+workload:
+    pattern: onoff
+    arrival_kwargs:
+        on_dur: 30.0 # seconds
+        on_rate: 30.0 # rps
+        off_dur: 90.0 # seconds
+        off_rate: 5.0 # rps
+    suite_ratio:
+        S: 0.4
+        R: 0.3
+        L: 0.3
+    warmup_duration_s: 300
+    warmup_max_requests: 200
+    run_duration_s: 1800
+    run_max_requests: 10000
