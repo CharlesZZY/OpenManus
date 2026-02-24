@@ -13,7 +13,7 @@ from app.tool.terminate import Terminate
 class BrowserWorker(ToolCallAgent):
     """
     Specialized worker for browser operations.
-    
+
     Handles tasks like:
     - Web page navigation
     - Form filling
@@ -44,4 +44,4 @@ class BrowserWorker(ToolCallAgent):
         default_factory=lambda: ToolCollection(BrowserUseTool(), Terminate())
     )
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

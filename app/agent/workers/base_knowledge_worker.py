@@ -14,14 +14,14 @@ from app.schema import AgentState, Message, ToolChoice
 class BaseKnowledgeWorker(ReActAgent):
     """
     Base class for knowledge-based workers.
-    
+
     These workers primarily rely on LLM capabilities for reasoning and generation,
     without needing external tools. They're suitable for tasks like:
     - Mathematical reasoning
     - Content writing
     - Historical analysis
     - Information summarization
-    
+
     Knowledge workers automatically terminate after generating their response,
     as they typically complete their task in a single step.
     """
@@ -33,12 +33,12 @@ class BaseKnowledgeWorker(ReActAgent):
     tool_choices: str = ToolChoice.NONE
 
     # Lower max_steps since knowledge workers typically complete in fewer steps
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps
 
     async def think(self) -> bool:
         """
         Use LLM for reasoning without tool calls.
-        
+
         Returns:
             True if the LLM produced a response, False otherwise
         """
@@ -66,20 +66,20 @@ class BaseKnowledgeWorker(ReActAgent):
     async def act(self) -> str:
         """
         Return the LLM's response as the action result.
-        
+
         For knowledge workers, the "action" is simply returning
         the generated content and then terminating.
-        
+
         Returns:
             The last assistant message content
         """
         result = "No response generated"
         if self.messages and self.messages[-1].content:
             result = self.messages[-1].content
-        
+
         # Knowledge workers automatically terminate after generating their response
         # since they typically complete their task in a single step
         logger.info(f"📝 {self.name} completed task, auto-terminating...")
         self.state = AgentState.FINISHED
-        
+
         return result

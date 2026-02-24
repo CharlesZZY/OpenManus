@@ -21,4 +21,4 @@ class SWEAgent(ToolCallAgent):
     )
     special_tool_names: List[str] = Field(default_factory=lambda: [Terminate().name])
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

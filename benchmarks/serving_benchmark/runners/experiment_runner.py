@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import subprocess
 import time
 import uuid
@@ -22,6 +23,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+
+logger = logging.getLogger("benchmark")
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
 
 from benchmarks.serving_benchmark.core.schema import (
     BenchmarkRequest,
@@ -141,6 +149,9 @@ class ExperimentRunner:
         """Execute a list of workload items through the scheduler."""
         all_logs: List[RequestLog] = []
         base_time = time.time()
+        phase = "warmup" if is_warmup else "run"
+        total_items = len(items)
+        completed_count = 0
 
         requests: List[BenchmarkRequest] = []
         for item in items:
@@ -173,15 +184,39 @@ class ExperimentRunner:
                 if req.arrive_time > now:
                     await asyncio.sleep(req.arrive_time - now)
 
+                req_t0 = time.time()
                 logs = await self._run_single_request(req)
                 all_logs.extend(logs)
+                completed_count += 1
+
+                req_elapsed = time.time() - req_t0
+                sample = req.sample
+                dataset = sample.dataset if sample else "?"
+                status = logs[0].status if logs else "?"
+                logger.info(
+                    "[%s] %d/%d  dataset=%-16s status=%-9s  %.2fs",
+                    phase, completed_count, total_items, dataset, status, req_elapsed,
+                )
 
                 await scheduler.on_complete(req.req_id, req)
 
         remaining = await scheduler.drain()
+        if remaining:
+            logger.info("[%s] Draining %d remaining requests ...", phase, len(remaining))
         for req in remaining:
+            req_t0 = time.time()
             logs = await self._run_single_request(req)
             all_logs.extend(logs)
+            completed_count += 1
+
+            req_elapsed = time.time() - req_t0
+            sample = req.sample
+            dataset = sample.dataset if sample else "?"
+            status = logs[0].status if logs else "?"
+            logger.info(
+                "[%s] %d/%d  dataset=%-16s status=%-9s  %.2fs",
+                phase, completed_count, total_items, dataset, status, req_elapsed,
+            )
 
         return all_logs
 
@@ -191,6 +226,7 @@ class ExperimentRunner:
         sched_name = sched_cfg.get("name", "fifo")
         sched_params = sched_cfg.get("params", {})
         scheduler = create_scheduler(sched_name, **sched_params)
+        logger.info("Scheduler: %s  params=%s", sched_name, sched_params)
 
         wl_cfg = self.workload_cfg.get("workload", {})
         wl_config = WorkloadConfig(
@@ -204,9 +240,17 @@ class ExperimentRunner:
             run_max_requests=wl_cfg.get("run_max_requests", 10000),
         )
 
+        logger.info("Loading sample pools ...")
         pools = self._load_sample_pools()
+        pool_sizes = {k: len(v) for k, v in pools.items()}
+        logger.info("Sample pools loaded: %s", pool_sizes)
+
         gen = WorkloadGenerator(wl_config, pools)
         warmup_items, run_items = gen.generate()
+        logger.info(
+            "Workload generated — warmup: %d items, run: %d items",
+            len(warmup_items), len(run_items),
+        )
 
         config_id = (
             f"{sched_name}_{wl_cfg.get('pattern', 'poisson')}"
@@ -240,21 +284,29 @@ class ExperimentRunner:
                 prefix=f"gpu_samples_{seed}",
             )
             gpu_logger.start()
+            logger.info("GPU logger started")
         except Exception:
-            pass
+            logger.warning("GPU logger unavailable, skipping GPU sampling")
 
         # Warm-up
+        logger.info("--- Warm-up phase (%d requests) ---", len(warmup_items))
+        warmup_t0 = time.time()
         await self._execute_phase(
             warmup_items, scheduler, config_id, seed, is_warmup=True
         )
+        logger.info("Warm-up done in %.1fs", time.time() - warmup_t0)
 
         # Fresh scheduler for sampling phase
         scheduler = create_scheduler(sched_name, **sched_params)
+        logger.info("--- Sampling phase (%d requests) ---", len(run_items))
+        run_t0 = time.time()
         logs = await self._execute_phase(run_items, scheduler, config_id, seed)
+        logger.info("Sampling done in %.1fs — %d logs collected", time.time() - run_t0, len(logs))
 
         if gpu_logger is not None:
             try:
                 gpu_logger.stop()
+                logger.info("GPU logger stopped")
             except Exception:
                 pass
 
@@ -270,8 +322,27 @@ class ExperimentRunner:
             "logs_by_seed": {},
         }
 
+        total_seeds = len(self.seeds)
+        logger.info(
+            "Experiment %s started — %d seed(s), output: %s",
+            self.experiment_id, total_seeds, out_dir,
+        )
+        exp_t0 = time.time()
+
         for repeat_idx, seed in enumerate(self.seeds):
+            seed_t0 = time.time()
+            logger.info(
+                "=== Repeat %d/%d  seed=%d ===", repeat_idx + 1, total_seeds, seed
+            )
+
             exp_config, logs, gpu_logger = await self.run_once(seed)
+
+            seed_elapsed = time.time() - seed_t0
+            ok = sum(1 for l in logs if l.status == "completed")
+            logger.info(
+                "Repeat %d/%d done — %d logs (%d ok) in %.1fs",
+                repeat_idx + 1, total_seeds, len(logs), ok, seed_elapsed,
+            )
 
             exp_config.repeat = repeat_idx
             all_results["configs"].append(asdict(exp_config))
@@ -300,6 +371,13 @@ class ExperimentRunner:
                     pass
 
         self._save_logs(out_dir, all_results["logs_by_seed"])
+
+        total_elapsed = time.time() - exp_t0
+        total_logs = sum(len(v) for v in all_results["logs_by_seed"].values())
+        logger.info(
+            "Experiment %s finished — %d total logs, %.1fs elapsed",
+            self.experiment_id, total_logs, total_elapsed,
+        )
 
         return all_results
 

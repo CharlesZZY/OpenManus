@@ -8,7 +8,7 @@ from app.agent.workers.base_knowledge_worker import BaseKnowledgeWorker
 class HistoryWorker(BaseKnowledgeWorker):
     """
     Specialized worker for historical question answering.
-    
+
     Handles tasks like:
     - Historical event analysis
     - Historical figure introductions
@@ -37,4 +37,4 @@ class HistoryWorker(BaseKnowledgeWorker):
 - 相关事件或人物的关联
 - 历史意义或启示（如适用）"""
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

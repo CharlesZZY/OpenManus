@@ -8,7 +8,7 @@ from app.agent.workers.base_knowledge_worker import BaseKnowledgeWorker
 class SummarizerWorker(BaseKnowledgeWorker):
     """
     Specialized worker for information summarization.
-    
+
     Handles tasks like:
     - Aggregating results from multiple agents
     - Creating executive summaries
@@ -39,4 +39,4 @@ class SummarizerWorker(BaseKnowledgeWorker):
 - 逻辑清晰，层次分明
 - 适当使用图表或列表增强可读性"""
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

@@ -13,7 +13,7 @@ from app.tool.web_search import WebSearch
 class SearchWorker(ToolCallAgent):
     """
     Specialized worker for web searching.
-    
+
     Handles tasks like:
     - Information retrieval
     - Data research
@@ -44,4 +44,4 @@ class SearchWorker(ToolCallAgent):
         default_factory=lambda: ToolCollection(WebSearch(), Terminate())
     )
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

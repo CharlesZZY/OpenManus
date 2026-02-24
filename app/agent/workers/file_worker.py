@@ -13,7 +13,7 @@ from app.tool.terminate import Terminate
 class FileWorker(ToolCallAgent):
     """
     Specialized worker for file operations.
-    
+
     Handles tasks like:
     - Creating new files
     - Editing existing files
@@ -44,4 +44,4 @@ class FileWorker(ToolCallAgent):
         default_factory=lambda: ToolCollection(StrReplaceEditor(), Terminate())
     )
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

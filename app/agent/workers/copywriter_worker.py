@@ -8,7 +8,7 @@ from app.agent.workers.base_knowledge_worker import BaseKnowledgeWorker
 class CopywriterWorker(BaseKnowledgeWorker):
     """
     Specialized worker for content writing and copywriting.
-    
+
     Handles tasks like:
     - Marketing copy
     - Article writing
@@ -41,4 +41,4 @@ class CopywriterWorker(BaseKnowledgeWorker):
 - 使用恰当的语气和风格
 - 注意标点和格式"""
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

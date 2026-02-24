@@ -8,7 +8,7 @@ from app.agent.workers.base_knowledge_worker import BaseKnowledgeWorker
 class MathWorker(BaseKnowledgeWorker):
     """
     Specialized worker for mathematical problem solving.
-    
+
     Handles tasks like:
     - Mathematical reasoning and proofs
     - Formula derivation
@@ -35,4 +35,4 @@ class MathWorker(BaseKnowledgeWorker):
 - 最终答案：明确的结论
 - 验证（可选）：对答案的检验"""
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

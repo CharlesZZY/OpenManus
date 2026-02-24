@@ -26,7 +26,7 @@ from app.trace.schema import EdgeType, NodeStatus, NodeType
 class Coordinator(ToolCallAgent):
     """
     Coordinator Agent - Orchestrates multi-agent task execution.
-    
+
     The Coordinator acts as the central hub in a multi-agent system,
     responsible for:
     1. Analyzing incoming tasks
@@ -98,7 +98,7 @@ class Coordinator(ToolCallAgent):
     )
 
     # Higher max_steps for coordinator
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps
 
     special_tool_names: List[str] = Field(
         default_factory=lambda: [Terminate().name]
@@ -114,7 +114,7 @@ class Coordinator(ToolCallAgent):
     def register_worker(self, worker_type: str, worker: ToolCallAgent) -> None:
         """
         Register a worker with the coordinator.
-        
+
         Args:
             worker_type: The type identifier for the worker
             worker: The worker agent instance
@@ -125,7 +125,7 @@ class Coordinator(ToolCallAgent):
     def register_workers(self, workers: Dict[str, ToolCallAgent]) -> None:
         """
         Register multiple workers at once.
-        
+
         Args:
             workers: Dictionary mapping worker types to worker instances
         """
@@ -135,10 +135,10 @@ class Coordinator(ToolCallAgent):
     async def execute_tool(self, command: ToolCall) -> str:
         """
         Execute a tool call, handling delegation specially.
-        
+
         Args:
             command: The tool call to execute
-        
+
         Returns:
             The result of the tool execution
         """
@@ -173,12 +173,12 @@ class Coordinator(ToolCallAgent):
     ) -> str:
         """
         Handle task delegation to a worker.
-        
+
         Args:
             worker_type: The type of worker to delegate to
             task: The task description
             context: Optional context information
-        
+
         Returns:
             The result from the worker
         """

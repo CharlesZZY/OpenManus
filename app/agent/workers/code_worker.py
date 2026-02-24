@@ -13,7 +13,7 @@ from app.tool.terminate import Terminate
 class CodeWorker(ToolCallAgent):
     """
     Specialized worker for code execution tasks.
-    
+
     Handles tasks like:
     - Writing and running Python code
     - Data processing and transformation
@@ -44,4 +44,4 @@ class CodeWorker(ToolCallAgent):
         default_factory=lambda: ToolCollection(PythonExecute(), Terminate())
     )
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

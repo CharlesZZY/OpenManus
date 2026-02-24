@@ -6,8 +6,11 @@ dataset's original prompt verbatim (never rewritten).
 
 from __future__ import annotations
 
+import logging
 import time
 from typing import Optional
+
+logger = logging.getLogger("benchmark")
 
 from benchmarks.serving_benchmark.core.schema import (
     BenchmarkRequest,
@@ -95,6 +98,8 @@ class SingleRunner:
         ]
 
         log.t_schedule = time.time()
+        raw_tokens = client.count_messages_tokens(messages)
+        messages = client.truncate_messages(messages)
         log.in_tokens = client.count_messages_tokens(messages)
 
         try:
@@ -117,10 +122,19 @@ class SingleRunner:
 
             log.quality_ok = judge(sample.dataset, full_response, sample.reference)
 
-        except Exception:
+            ttft = (log.t_first_token - log.t_schedule) if log.t_first_token else 0
+            e2e = log.t_finish - log.t_schedule
+            logger.debug(
+                "  req=%s  in=%d out=%d  TTFT=%.3fs  E2E=%.2fs  quality=%s",
+                request.req_id[:8], log.in_tokens, log.out_tokens,
+                ttft, e2e, log.quality_ok,
+            )
+
+        except Exception as exc:
             log.t_finish = time.time()
             log.status = RequestStatus.FAILED.value
             log.quality_ok = False
+            logger.warning("  req=%s FAILED: %s", request.req_id[:8], exc)
 
         request.log = log
         return log

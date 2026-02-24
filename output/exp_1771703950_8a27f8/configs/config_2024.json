@@ -1,0 +1,17 @@
+{
+  "config_id": "fifo_poisson_single_qwen_2_5b_2024",
+  "baseline": "fifo",
+  "pattern": "poisson",
+  "suite": "S",
+  "mode": "single",
+  "model_size": "small",
+  "deployment": "single_node",
+  "seed": 2024,
+  "repeat": 2,
+  "warmup_duration_s": 300.0,
+  "warmup_max_requests": 200,
+  "run_duration_s": 1800.0,
+  "run_max_requests": 10000,
+  "git_commit": "09b128e8547f01caaa3f4e8b7f38882012b39c80",
+  "extra": {}
+}

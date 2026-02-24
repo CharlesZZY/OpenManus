@@ -14,7 +14,7 @@ from app.tool.terminate import Terminate
 class DataAnalystWorker(ToolCallAgent):
     """
     Specialized worker for data analysis.
-    
+
     Combines code execution and file operations for data tasks.
     Handles tasks like:
     - Data cleaning and preprocessing
@@ -60,4 +60,4 @@ class DataAnalystWorker(ToolCallAgent):
         default_factory=lambda: ToolCollection(PythonExecute(), StrReplaceEditor(), Terminate())
     )
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

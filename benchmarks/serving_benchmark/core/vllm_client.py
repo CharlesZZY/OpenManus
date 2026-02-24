@@ -9,6 +9,7 @@ Provides:
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import tiktoken
 import yaml
+
+logger = logging.getLogger("benchmark")
 
 _DEFAULT_CONFIG_PATH = (
     Path(__file__).resolve().parent.parent / "configs" / "models.yaml"
@@ -31,6 +34,7 @@ class ModelConfig:
     base_url: str = "http://localhost:8000/v1"
     api_key: str = "EMPTY"
     max_tokens: int = 4096
+    context_length: int = 32768
     temperature: float = 0.7
     size_tier: str = "small"
     tensor_parallel: int = 1
@@ -52,6 +56,7 @@ class ModelRegistry:
                 base_url=cfg.get("base_url", "http://localhost:8000/v1"),
                 api_key=cfg.get("api_key", "EMPTY"),
                 max_tokens=cfg.get("max_tokens", 4096),
+                context_length=cfg.get("context_length", 32768),
                 temperature=cfg.get("temperature", 0.7),
                 size_tier=cfg.get("size_tier", "small"),
                 tensor_parallel=cfg.get("tensor_parallel", 1),
@@ -100,6 +105,61 @@ class VLLMClient:
         except KeyError:
             self._tokenizer = tiktoken.get_encoding("cl100k_base")
 
+    # -- prompt truncation --------------------------------------------------
+
+    # tiktoken (cl100k_base) vs model-native tokenizer can differ by 10-20%;
+    # this factor compensates so the actual token count stays within limits.
+    TOKENIZER_SAFETY_FACTOR = 0.85
+
+    @property
+    def max_input_tokens(self) -> int:
+        """Maximum input tokens (with safety margin for tokenizer mismatch)."""
+        raw = self.cfg.context_length - self.cfg.max_tokens
+        return int(raw * self.TOKENIZER_SAFETY_FACTOR)
+
+    def truncate_messages(
+        self, messages: List[Dict[str, str]]
+    ) -> List[Dict[str, str]]:
+        """Truncate the longest user message so total tokens fit within context.
+
+        Strategy: keep system messages intact, truncate the longest user/
+        assistant content from the tail until the total fits.
+        """
+        limit = self.max_input_tokens
+        total = self.count_messages_tokens(messages)
+        if total <= limit:
+            return messages
+
+        overflow = total - limit
+        logger.warning(
+            "Prompt %d tokens exceeds limit %d (context=%d, gen=%d, safety=%.0f%%), "
+            "truncating %d tokens",
+            total, limit, self.cfg.context_length, self.cfg.max_tokens,
+            self.TOKENIZER_SAFETY_FACTOR * 100, overflow,
+        )
+
+        messages = [dict(m) for m in messages]
+
+        longest_idx = -1
+        longest_len = 0
+        for i, msg in enumerate(messages):
+            if msg.get("role") == "system":
+                continue
+            n = self.count_tokens(msg.get("content", ""))
+            if n > longest_len:
+                longest_len = n
+                longest_idx = i
+
+        if longest_idx < 0:
+            return messages
+
+        content = messages[longest_idx]["content"]
+        encoded = self._tokenizer.encode(content, disallowed_special=())
+        keep = max(len(encoded) - overflow, 64)
+        truncated = self._tokenizer.decode(encoded[:keep])
+        messages[longest_idx]["content"] = truncated + "\n...[truncated]"
+        return messages
+
     # -- core API -----------------------------------------------------------
 
     async def chat_stream(
@@ -110,6 +170,7 @@ class VLLMClient:
         temperature: Optional[float] = None,
     ) -> AsyncGenerator[str, None]:
         """Yield content deltas from a streaming chat completion."""
+        messages = self.truncate_messages(messages)
         params: Dict[str, Any] = {
             "model": self.cfg.model_name,
             "messages": messages,
@@ -133,6 +194,7 @@ class VLLMClient:
         temperature: Optional[float] = None,
     ) -> str:
         """Non-streaming chat completion."""
+        messages = self.truncate_messages(messages)
         params: Dict[str, Any] = {
             "model": self.cfg.model_name,
             "messages": messages,
@@ -174,7 +236,7 @@ class VLLMClient:
     def count_tokens(self, text: str) -> int:
         if not text:
             return 0
-        return len(self._tokenizer.encode(text))
+        return len(self._tokenizer.encode(text, disallowed_special=()))
 
     def count_messages_tokens(self, messages: List[Dict[str, str]]) -> int:
         total = 0

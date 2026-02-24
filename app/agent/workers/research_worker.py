@@ -14,7 +14,7 @@ from app.tool.web_search import WebSearch
 class ResearchWorker(ToolCallAgent):
     """
     Specialized worker for comprehensive research.
-    
+
     Combines search and browsing capabilities for in-depth research.
     Handles tasks like:
     - Deep research on topics
@@ -53,4 +53,4 @@ class ResearchWorker(ToolCallAgent):
         default_factory=lambda: ToolCollection(WebSearch(), BrowserUseTool(), Terminate())
     )
 
-    max_steps: int = 0  # Unlimited steps
+    max_steps: int = 10  # Unlimited steps

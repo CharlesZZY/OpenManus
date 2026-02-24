@@ -3,7 +3,7 @@
 Sampling period: 100ms (未指定, configurable).
 
 Strategy:
-  1. Primary: pynvml (lower latency, no subprocess overhead)
+  1. Primary: nvidia-ml-py (lower latency, no subprocess overhead)
   2. Fallback: nvidia-smi subprocess polling
 
 Output: gpu_samples_{config_id}_{seed}.csv  with columns (ts, gpu_util, gpu_mem_used).
@@ -40,26 +40,26 @@ class GPULogger:
         self._buffer: List[dict] = []
         self._lock = threading.Lock()
 
-        self._use_pynvml = False
+        self._use_nvml = False
         self._nvml_handle = None
         self._init_backend()
 
     def _init_backend(self):
-        """Try pynvml, fall back to nvidia-smi."""
+        """Try nvidia-ml-py, fall back to nvidia-smi."""
         try:
-            import pynvml
+            from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex
 
-            pynvml.nvmlInit()
-            self._nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-            self._use_pynvml = True
+            nvmlInit()
+            self._nvml_handle = nvmlDeviceGetHandleByIndex(0)
+            self._use_nvml = True
         except Exception:
-            self._use_pynvml = False
+            self._use_nvml = False
 
-    def _sample_pynvml(self) -> GPULog:
-        import pynvml
+    def _sample_nvml(self) -> GPULog:
+        from pynvml import nvmlDeviceGetUtilizationRates, nvmlDeviceGetMemoryInfo
 
-        util = pynvml.nvmlDeviceGetUtilizationRates(self._nvml_handle)
-        mem = pynvml.nvmlDeviceGetMemoryInfo(self._nvml_handle)
+        util = nvmlDeviceGetUtilizationRates(self._nvml_handle)
+        mem = nvmlDeviceGetMemoryInfo(self._nvml_handle)
         return GPULog(
             ts=time.time(),
             gpu_util=float(util.gpu),
@@ -91,9 +91,9 @@ class GPULogger:
             return GPULog(ts=time.time(), gpu_util=0.0, gpu_mem_used=0.0)
 
     def _sample(self) -> GPULog:
-        if self._use_pynvml and self._nvml_handle is not None:
+        if self._use_nvml and self._nvml_handle is not None:
             try:
-                return self._sample_pynvml()
+                return self._sample_nvml()
             except Exception:
                 pass
         return self._sample_nvidia_smi()
